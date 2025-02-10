@@ -1,0 +1,72 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_IMAGE = "actix-web-apiparalela" 
+        DOCKER_TAG = "latest"                 
+        NEXUS_URL = "nexus.tu-dominio.com"    
+        NEXUS_REPO = "repositorio-docker"    
+        SERVER_USER = "marielap"           
+        SERVER_HOST = "127.0.0.1:3030"      
+    }
+
+    stages {
+        stage('Clonar Repositorio') {
+            steps {
+                git branch: 'develop', url: 'https://github.com/marielapichardo/appMovilHilos'
+            }
+        }
+
+        stage('Construir Imagen Docker') {
+            steps {
+                script {
+                    sh """
+                    docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
+                    """
+                }
+            }
+        }
+
+        stage('Subir Imagen a Nexus') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'nexus-credenciales-id', 
+                                                     usernameVariable: 'NEXUS_USER', 
+                                                     passwordVariable: 'NEXUS_PASSWORD')]) {
+                        sh """
+                        docker login ${NEXUS_URL} -u ${NEXUS_USER} -p ${NEXUS_PASSWORD}
+                        docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${NEXUS_URL}/${NEXUS_REPO}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                        docker push ${NEXUS_URL}/${NEXUS_REPO}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Despliegue en Servidor') {
+            steps {
+                script {
+                    sshagent(['servidor-credenciales-id']) {
+                        sh """
+                        ssh ${SERVER_USER}@${SERVER_HOST} << EOF
+                        docker pull ${NEXUS_URL}/${NEXUS_REPO}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                        docker stop ${DOCKER_IMAGE} || true
+                        docker rm ${DOCKER_IMAGE} || true
+                        docker run -d --name ${DOCKER_IMAGE} -p 3030:3030 ${NEXUS_URL}/${NEXUS_REPO}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                        EOF
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pipeline completado exitosamente"
+        }
+        failure {
+            echo "El pipeline falló"
+        }
+    }
+}
